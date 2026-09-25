@@ -1,0 +1,41 @@
+services:
+  txffp-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    container_name: txffp-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ../data:/data
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - DATA_DIR=/data
+      - DATABASE_URL=sqlite:///data/txffp.db
+      - STEEL_BASE_URL=${STEEL_BASE_URL:-http://192.168.8.11:13000}
+      - SCRAPLING_BASE_URL=${SCRAPLING_BASE_URL:-http://192.168.8.11:8111}
+      - TXFFP_AUTH_MODE=${TXFFP_AUTH_MODE:-hybrid}
+      - TXFFP_AUTO_LOGIN=${TXFFP_AUTO_LOGIN:-true}
+      - TXFFP_MAX_AUTH_ATTEMPTS=${TXFFP_MAX_AUTH_ATTEMPTS:-3}
+      - TXFFP_RESEARCH_MODE=${TXFFP_RESEARCH_MODE:-false}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  txffp-web:
+    profiles: ["ui"]
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    container_name: txffp-web
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    depends_on:
+      - txffp-server
