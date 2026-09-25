@@ -1,6 +1,28 @@
+use aes::cipher::{BlockCipherEncrypt, KeyInit};
+use aes::{Aes128, Block};
+use base64::Engine;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+
+pub const AES_LOGIN_KEY: &[u8; 16] = b"#xy@etcchina.com";
+
+pub fn encrypt_password(password: &str) -> String {
+    let cipher = Aes128::new(AES_LOGIN_KEY.into());
+
+    let bytes = password.as_bytes();
+    let pad_len = 16 - (bytes.len() % 16);
+    let mut padded = Vec::with_capacity(bytes.len() + pad_len);
+    padded.extend_from_slice(bytes);
+    padded.resize(bytes.len() + pad_len, pad_len as u8);
+
+    for chunk in padded.chunks_exact_mut(16) {
+        let block: &mut Block = chunk.try_into().expect("16-byte chunk");
+        cipher.encrypt_block(block);
+    }
+
+    base64::engine::general_purpose::STANDARD.encode(&padded)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EtcCard {
@@ -22,7 +44,7 @@ pub struct TransactionRecord {
     pub en_station: String,
     pub ex_station: String,
     pub amount: Decimal,
-    pub invoice_status: String, // "UNINVOICED", "INVOICING", "INVOICED", "INELIGIBLE"
+    pub invoice_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,8 +57,8 @@ pub struct InvoiceTitle {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvoicePreviewRequest {
-    pub start_date: String, // YYYY-MM-DD
-    pub end_date: String,   // YYYY-MM-DD
+    pub start_date: String,
+    pub end_date: String,
     pub card_id: Option<String>,
     pub invoice_title_id: Option<String>,
 }
@@ -107,5 +129,11 @@ mod tests {
         let d2 = Decimal::from_str("32.00").unwrap();
         let total = d1 + d2;
         assert_eq!(total.to_string(), "57.50");
+    }
+
+    #[test]
+    fn test_password_aes_encryption() {
+        let encrypted = encrypt_password("MyPassword123");
+        assert_eq!(encrypted, "6aGTJZUW9WSNGEPbX9Kj/g==");
     }
 }
