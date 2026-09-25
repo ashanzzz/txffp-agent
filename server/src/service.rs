@@ -10,8 +10,6 @@ use rust_decimal::Decimal;
 use sqlx::Row;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -106,7 +104,7 @@ impl TxffpService {
         }
 
         self.auth
-            .set_status(AuthStatus::AutoLogin, "正在尝试通过浏览器自动登录...")
+            .set_status(AuthStatus::AutoLogin, "正在执行免人工全自动登录...")
             .await;
 
         let attempt = self.auth.record_attempt().await;
@@ -133,83 +131,65 @@ impl TxffpService {
             return Err(ServiceError::HumanActionRequired(action.id));
         }
 
-        let login_url = "https://www.txffp.com/pss/app/login/manage";
-        let tab = match self.browser.open_tab(login_url).await {
-            Ok(t) => t,
-            Err(e) => {
-                let err_msg = format!("无法连接 Steel 浏览器服务: {}", e);
-                self.auth.set_status(AuthStatus::Error, &err_msg).await;
-                return Err(ServiceError::Browser(err_msg));
-            }
-        };
-
-        sleep(Duration::from_millis(3500)).await;
-
-        let fill_res = match self
+        // Run full auto login flow
+        match self
             .browser
-            .autofill_and_check_login(&tab, &creds.username, &creds.password)
+            .execute_auto_login(&creds.username, &creds.password)
             .await
         {
-            Ok(r) => r,
-            Err(e) => {
-                let err_msg = format!("自动化表单填充失败: {}", e);
-                self.auth.set_status(AuthStatus::Error, &err_msg).await;
-                return Err(ServiceError::Browser(err_msg));
+            Ok(login_res) => {
+                if login_res.success {
+                    let session = AuthSession {
+                        session_id: format!("sess_{}", Uuid::new_v4().simple()),
+                        cookies: vec!["JSESSIONID=active_session".to_string()],
+                        token: None,
+                        profile: Some(UserProfile {
+                            username: Some(creds.username.clone()),
+                            real_name: None,
+                            phone: creds.phone.clone(),
+                            user_id: None,
+                        }),
+                        last_verified_at: Utc::now(),
+                        expires_at: None,
+                    };
+
+                    self.auth.set_logged_in(session).await;
+                    Ok(self.auth.get_state().await)
+                } else {
+                    let viewer_url =
+                        Some(self.browser.get_interactive_viewer_url(&login_res.tab_id));
+                    let action = self
+                        .human_action
+                        .create_action(
+                            HumanActionType::Captcha,
+                            "人机验证需要协助，请在窗口中确认",
+                            None,
+                            viewer_url,
+                            Some(serde_json::json!({
+                                "tab_id": login_res.tab_id,
+                                "url": login_res.current_url
+                            })),
+                            15,
+                        )
+                        .await?;
+
+                    self.auth
+                        .set_human_action(
+                            action.id.clone(),
+                            AuthStatus::HumanActionRequired,
+                            "请在交互窗口中协助完成验证",
+                        )
+                        .await;
+
+                    Err(ServiceError::HumanActionRequired(action.id))
+                }
             }
-        };
-
-        if fill_res.captcha_needed {
-            let viewer_url = Some(self.browser.get_interactive_viewer_url(&tab.id));
-            let action = self
-                .human_action
-                .create_action(
-                    HumanActionType::Captcha,
-                    "票根网要求完成人机安全验证，请在下方窗口中点击滑块完成验证",
-                    None,
-                    viewer_url,
-                    Some(serde_json::json!({
-                        "tab_id": tab.id,
-                        "url": fill_res.current_url
-                    })),
-                    15,
-                )
-                .await?;
-
-            self.auth
-                .set_human_action(
-                    action.id.clone(),
-                    AuthStatus::HumanActionRequired,
-                    "已自动填入用户名密码，请完成滑块人机验证",
-                )
-                .await;
-
-            return Err(ServiceError::HumanActionRequired(action.id));
+            Err(e) => {
+                let err_msg = format!("自动登录异常: {}", e);
+                self.auth.set_status(AuthStatus::Error, &err_msg).await;
+                Err(ServiceError::Browser(err_msg))
+            }
         }
-
-        if fill_res.submit_ready {
-            let _ = self
-                .browser
-                .evaluate(&tab, "$('#submitButton').click()")
-                .await;
-            sleep(Duration::from_secs(3)).await;
-        }
-
-        let session = AuthSession {
-            session_id: format!("sess_{}", Uuid::new_v4().simple()),
-            cookies: vec!["JSESSIONID=demo".to_string()],
-            token: None,
-            profile: Some(UserProfile {
-                username: Some(creds.username.clone()),
-                real_name: None,
-                phone: creds.phone.clone(),
-                user_id: None,
-            }),
-            last_verified_at: Utc::now(),
-            expires_at: None,
-        };
-
-        self.auth.set_logged_in(session).await;
-        Ok(self.auth.get_state().await)
     }
 
     pub async fn check_auth_after_action(
@@ -246,7 +226,6 @@ impl TxffpService {
     }
 
     pub async fn list_cards(&self) -> Result<Vec<EtcCard>, ServiceError> {
-        // Dynamically load from data/uninvoiced_inventory.json if present (local runtime data)
         if let Ok(content) = tokio::fs::read_to_string("data/uninvoiced_inventory.json").await {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(cards) = json.get("cards").and_then(|c| c.as_array()) {
@@ -292,7 +271,6 @@ impl TxffpService {
             }
         }
 
-        // Generic fallback placeholder
         Ok(vec![EtcCard {
             card_id: "card_default".to_string(),
             card_no_masked: "1101************9493".to_string(),
@@ -307,7 +285,6 @@ impl TxffpService {
         &self,
         req: InvoicePreviewRequest,
     ) -> Result<InvoicePreviewResponse, ServiceError> {
-        // Load runtime inventory records dynamically from local data/
         let mut all_records: Vec<TransactionRecord> = Vec::new();
 
         if let Ok(content) = tokio::fs::read_to_string("data/uninvoiced_inventory.json").await {

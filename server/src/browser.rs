@@ -2,7 +2,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -39,6 +39,14 @@ pub struct LoginFillResult {
     pub captcha_needed: bool,
     pub submit_ready: bool,
     pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoLoginResult {
+    pub success: bool,
+    pub tab_id: String,
+    pub current_url: String,
+    pub message: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -136,15 +144,8 @@ impl SteelBrowserDriver {
             BrowserError::Cdp("No webSocketDebuggerUrl available for target".to_string())
         })?;
 
-        // Normalize host/port if mapped through Docker port (e.g. host port 19223)
         if let Ok(cdp_parsed) = reqwest::Url::parse(&self.cdp_base_url) {
             if let Some(host) = cdp_parsed.host_str() {
-                let port_suffix = if let Some(port) = cdp_parsed.port() {
-                    format!("{}:{}", host, port)
-                } else {
-                    host.to_string()
-                };
-
                 if let Ok(mut parsed_ws) = reqwest::Url::parse(&ws_url) {
                     if let Some(ws_host) = parsed_ws.host_str() {
                         if ws_host == host && parsed_ws.port() != cdp_parsed.port() {
@@ -153,7 +154,6 @@ impl SteelBrowserDriver {
                         }
                     }
                 }
-                let _ = port_suffix;
             }
         }
 
@@ -199,6 +199,70 @@ impl SteelBrowserDriver {
         .map_err(|_| BrowserError::Timeout)??;
 
         Ok(res)
+    }
+
+    pub async fn dispatch_mouse_click(
+        &self,
+        target: &CdpTarget,
+        x: f64,
+        y: f64,
+    ) -> Result<(), BrowserError> {
+        let mut ws_url = target.websocket_debugger_url.clone().ok_or_else(|| {
+            BrowserError::Cdp("No webSocketDebuggerUrl available for target".to_string())
+        })?;
+
+        if let Ok(cdp_parsed) = reqwest::Url::parse(&self.cdp_base_url) {
+            if let Some(host) = cdp_parsed.host_str() {
+                if let Ok(mut parsed_ws) = reqwest::Url::parse(&ws_url) {
+                    if let Some(ws_host) = parsed_ws.host_str() {
+                        if ws_host == host && parsed_ws.port() != cdp_parsed.port() {
+                            let _ = parsed_ws.set_port(cdp_parsed.port());
+                            ws_url = parsed_ws.to_string();
+                        }
+                    }
+                }
+            }
+        }
+
+        let (ws_stream, _) = timeout(Duration::from_secs(5), connect_async(&ws_url))
+            .await
+            .map_err(|_| BrowserError::Timeout)??;
+
+        let (mut write, _) = ws_stream.split();
+
+        // 1. mouseMoved
+        let move_req = serde_json::json!({
+            "id": 10,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mouseMoved", "x": x, "y": y }
+        });
+        write
+            .send(Message::Text(move_req.to_string().into()))
+            .await?;
+        sleep(Duration::from_millis(100)).await;
+
+        // 2. mousePressed
+        let press_req = serde_json::json!({
+            "id": 11,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }
+        });
+        write
+            .send(Message::Text(press_req.to_string().into()))
+            .await?;
+        sleep(Duration::from_millis(80)).await;
+
+        // 3. mouseReleased
+        let release_req = serde_json::json!({
+            "id": 12,
+            "method": "Input.dispatchMouseEvent",
+            "params": { "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }
+        });
+        write
+            .send(Message::Text(release_req.to_string().into()))
+            .await?;
+
+        Ok(())
     }
 
     pub async fn autofill_and_check_login(
@@ -251,5 +315,140 @@ impl SteelBrowserDriver {
             .map_err(|e| BrowserError::Cdp(format!("Failed to parse login fill result: {}", e)))?;
 
         Ok(res)
+    }
+
+    pub async fn execute_auto_login(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<AutoLoginResult, BrowserError> {
+        let login_url = "https://www.txffp.com/pss/app/login/manage";
+        let target = self.open_tab(login_url).await?;
+        // 0. Quick check: Is the browser already logged in?
+        sleep(Duration::from_millis(2000)).await;
+        if let Ok(val) = self.evaluate(&target, "document.body ? (document.body.innerText.includes('个人中心') && document.body.innerText.includes('我的ETC')) : false").await {
+            if val.as_bool() == Some(true) {
+                return Ok(AutoLoginResult {
+                    success: true,
+                    tab_id: target.id,
+                    current_url: target.url,
+                    message: "检测到已有活跃登录会话，直接复用".to_string(),
+                });
+            }
+        }
+
+        // Poll for inputs and captcha icon
+        let mut coords_opt: Option<(f64, f64, String)> = None;
+        let escaped_user = username.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_pass = password.replace('\\', "\\\\").replace('"', "\\\"");
+
+        for _ in 0..20 {
+            sleep(Duration::from_millis(600)).await;
+
+            let check_script = format!(
+                r#"
+                (() => {{
+                    const u = document.getElementById('loginName');
+                    const p = document.getElementById('passwd');
+                    const icon = document.getElementById('aliyunCaptcha-checkbox-icon') || document.getElementById('aliyunCaptcha-checkbox-body');
+                    if (u && p && !u.value) {{
+                        u.value = "{username}";
+                        u.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        u.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        p.value = "{password}";
+                        p.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        p.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                    if (!icon) return null;
+                    const r = icon.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) return null;
+                    return {{
+                        x: r.x + r.width / 2,
+                        y: r.y + r.height / 2,
+                        text: document.getElementById('sc')?.innerText?.trim() || ''
+                    }};
+                }})()
+                "#,
+                username = escaped_user,
+                password = escaped_pass
+            );
+
+            if let Ok(val) = self.evaluate(&target, &check_script).await {
+                if let (Some(x), Some(y)) = (
+                    val.get("x").and_then(|v| v.as_f64()),
+                    val.get("y").and_then(|v| v.as_f64()),
+                ) {
+                    let text = val
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    coords_opt = Some((x, y, text));
+                    break;
+                }
+            }
+        }
+
+        let (x, y, sc_text) = coords_opt.ok_or_else(|| {
+            BrowserError::Cdp("Timed out waiting for login form and captcha".to_string())
+        })?;
+
+        // If timed out, reset first
+        if sc_text.contains("重试") {
+            let _ = self.dispatch_mouse_click(&target, x, y).await;
+            sleep(Duration::from_millis(1500)).await;
+        }
+
+        // Click captcha checkbox
+        self.dispatch_mouse_click(&target, x, y).await?;
+        sleep(Duration::from_millis(2500)).await;
+
+        // Check if verified
+        let verify_script = r#"
+            (() => {
+                const captchaParam = document.getElementById('captchaVerifyParam');
+                const submitBtn = document.getElementById('submitButton');
+                const sc = document.getElementById('sc');
+                return {
+                    captcha: captchaParam ? captchaParam.value : "",
+                    ready: submitBtn ? submitBtn.classList.contains('taiji_ajaxForm') : false,
+                    text: sc ? sc.innerText.trim() : ""
+                };
+            })()
+        "#;
+
+        let verify_val = self.evaluate(&target, verify_script).await?;
+        let is_ready = verify_val
+            .get("ready")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let has_captcha = verify_val
+            .get("captcha")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
+        if is_ready || has_captcha {
+            // Click submit
+            let _ = self.evaluate(&target, "$('#submitButton').click()").await;
+            sleep(Duration::from_millis(4000)).await;
+
+            let final_val = self.evaluate(&target, "window.location.href").await?;
+            let final_url = final_val.as_str().unwrap_or_default().to_string();
+
+            Ok(AutoLoginResult {
+                success: true,
+                tab_id: target.id,
+                current_url: final_url,
+                message: "自动登录已成功完成".to_string(),
+            })
+        } else {
+            Ok(AutoLoginResult {
+                success: false,
+                tab_id: target.id,
+                current_url: target.url,
+                message: "人机验证未直接通过，已转入人工通道".to_string(),
+            })
+        }
     }
 }
