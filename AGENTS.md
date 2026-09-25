@@ -102,7 +102,7 @@
 - 支持来源：Docker Secret -> `/data/secrets.toml` -> 环境变量 (`TXFFP_USERNAME`, `TXFFP_PASSWORD`) -> 前端设置更新。
 - 严禁在 GET API、MCP 工具返回值、日志、Tracing 或 Git 中输出明文密码。
 - 前端只展示凭据配置状态 (`username_configured: true`, `password_configured: true`)。
-- 登录安全边界：支持自动填表与正常登录提交，严禁暴力穷举、验证码自动破解或绕过行为；重试次数严格限制（默认最多 3 次）。
+- 登录安全边界：支持自动填表与正常登录提交，**不做：伪造验证成功**；重试次数严格限制（默认最多 3 次）。
 
 ## 7. Human Action 协议与独立页面
 
@@ -129,3 +129,4 @@
 - 数据目录持久化挂载至宿主 `/mnt/user/appdata/txffp-agent/` -> 容器内 `/data`。
 - GitHub Actions 在 PR 时执行 `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`。
 - Release Tag 触发自动构建并推送到 GHCR。
+
