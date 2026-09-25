@@ -16,14 +16,14 @@ web/.vite/
 secrets.toml
 secrets.json
 
-# SQLite & Data
+# SQLite & Runtime Data
 /data/
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 downloads/
-research/
+data/research/
 
 # IDE / OS
 .idea/
