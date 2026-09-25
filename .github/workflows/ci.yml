@@ -1,4 +1,4 @@
-name: CI & Release
+name: CI & Docker Build
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
     tags: [ "v*" ]
   pull_request:
     branches: [ "master", "main" ]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -32,7 +33,7 @@ jobs:
       - name: Clippy Linter
         run: cargo clippy -- -D warnings
 
-      - name: Run Tests (Mock / Isolated)
+      - name: Run Unit Tests
         run: cargo test
 
   frontend-test:
@@ -57,7 +58,7 @@ jobs:
   build-and-push-server:
     name: Build & Push Server Container Image
     needs: [backend-test, frontend-test]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,8 +83,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=ref,event=branch
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
 
       - name: Build and Push Server Image
         uses: docker/build-push-action@v5
@@ -99,7 +101,7 @@ jobs:
   build-and-push-web:
     name: Build & Push Web Container Image
     needs: [backend-test, frontend-test]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -124,8 +126,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-web
           tags: |
+            type=ref,event=branch
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
 
       - name: Build and Push Web Image
         uses: docker/build-push-action@v5

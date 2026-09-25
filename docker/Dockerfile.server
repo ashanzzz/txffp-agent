@@ -2,7 +2,7 @@
 FROM rust:1.85-bookworm AS builder
 
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 COPY server/Cargo.toml ./server/Cargo.toml
 
 # Cache dependencies
