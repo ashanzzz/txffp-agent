@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>txffp-agent</Name>
+  <Repository>ghcr.io/ashanzzz/txffp-agent:latest</Repository>
+  <Registry>https://ghcr.io/ashanzzz/txffp-agent</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ashanzzz/txffp-agent</Support>
+  <Project>https://github.com/ashanzzz/txffp-agent</Project>
+  <Overview>小型、高可靠、低资源占用、可长期维护的票根自动开票工具 (Txffp Agent)，支持 REST API、MCP、自动登录、ETC通行记录查询、开票 Preview/Submit/下载以及内置 Human Action 兜底机制。</Overview>
+  <Category>Productivity: Tools: Network:Web</Category>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://www.txffp.com/pss/myimages/index.png</Icon>
+  <ExtraParams>--restart unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled>2026-09-25</DateInstalled>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI &amp; API Port" Target="8000" Default="8000" Mode="tcp" Description="HTTP REST API &amp; WebUI 访问端口" Type="Port" Display="always" Required="true" Mask="false">8000</Config>
+  <Config Name="Data Path" Target="/data" Default="/mnt/user/appdata/txffp-agent" Mode="rw" Description="持久化数据存储目录（包含 SQLite 数据库、secrets、下载发票与日志）" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/txffp-agent</Config>
+  <Config Name="Steel Browser URL" Target="STEEL_BASE_URL" Default="http://192.168.8.11:13000" Mode="" Description="Steel 远程无头浏览器 API 地址" Type="Variable" Display="always" Required="false" Mask="false">http://192.168.8.11:13000</Config>
+  <Config Name="CDP Base URL" Target="CDP_BASE_URL" Default="http://192.168.8.11:19223" Mode="" Description="Steel 远程 Chrome DevTools Protocol 端口地址" Type="Variable" Display="always" Required="false" Mask="false">http://192.168.8.11:19223</Config>
+  <Config Name="Auth Mode" Target="TXFFP_AUTH_MODE" Default="hybrid" Mode="" Description="登录模式 (hybrid / auto / manual)" Type="Variable" Display="always" Required="false" Mask="false">hybrid</Config>
+  <Config Name="Auto Login" Target="TXFFP_AUTO_LOGIN" Default="true" Mode="" Description="是否开启自动登录尝试" Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Max Auth Attempts" Target="TXFFP_MAX_AUTH_ATTEMPTS" Default="3" Mode="" Description="单次登录最大重试次数" Type="Variable" Display="always" Required="false" Mask="false">3</Config>
+  <Config Name="Research Mode" Target="TXFFP_RESEARCH_MODE" Default="false" Mode="" Description="脱敏研究模式开关" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+</Container>

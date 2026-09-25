@@ -49,7 +49,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let auth_manager = Arc::new(AuthManager::new());
     let human_action_manager = Arc::new(HumanActionManager::new(pool.clone()));
-    let browser_driver = Arc::new(SteelBrowserDriver::new(&config.steel_base_url));
+    let browser_driver = Arc::new(SteelBrowserDriver::new(
+        &config.steel_base_url,
+        &config.cdp_base_url,
+    ));
 
     let service = Arc::new(TxffpService::new(
         config.clone(),

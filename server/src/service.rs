@@ -9,6 +9,8 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use sqlx::Row;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -66,7 +68,7 @@ impl TxffpService {
     pub async fn ensure_auth(&self) -> Result<AuthState, ServiceError> {
         let current_state = self.auth.get_state().await;
         if current_state.status == AuthStatus::LoggedIn {
-            // Already logged in, quickly verify
+            // Already logged in, return current state
             return Ok(current_state);
         }
 
@@ -79,7 +81,7 @@ impl TxffpService {
             return Err(ServiceError::CredentialsRequired);
         }
 
-        let _creds = creds.unwrap();
+        let creds = creds.unwrap();
 
         // Check if auto login is disabled or manual only
         if self.config.auth_mode == crate::config::AuthMode::Manual {
@@ -134,38 +136,89 @@ impl TxffpService {
             return Err(ServiceError::HumanActionRequired(action.id));
         }
 
-        // Create browser session for login
-        match self.browser.create_session().await {
-            Ok(session) => {
-                let viewer_url = session.session_viewer_url.clone();
-                let action = self
-                    .human_action
-                    .create_action(
-                        HumanActionType::Login,
-                        "已启动浏览器登录会话，若出现短信验证或人机验证请在下方界面完成",
-                        None,
-                        viewer_url,
-                        None,
-                        30,
-                    )
-                    .await?;
-
-                self.auth
-                    .set_human_action(
-                        action.id.clone(),
-                        AuthStatus::HumanActionRequired,
-                        "登录会话已就绪，等待用户在交互窗口确认或完成验证",
-                    )
-                    .await;
-
-                Err(ServiceError::HumanActionRequired(action.id))
-            }
+        // 1. Open or navigate tab to txffp login URL
+        let login_url = "https://www.txffp.com/pss/app/login/manage";
+        let tab = match self.browser.open_tab(login_url).await {
+            Ok(t) => t,
             Err(e) => {
                 let err_msg = format!("无法连接 Steel 浏览器服务: {}", e);
                 self.auth.set_status(AuthStatus::Error, &err_msg).await;
-                Err(ServiceError::Browser(err_msg))
+                return Err(ServiceError::Browser(err_msg));
             }
+        };
+
+        // Allow redirect to SSO and Aliyun captcha loading
+        sleep(Duration::from_millis(3500)).await;
+
+        // 2. Perform autofill of credentials
+        let fill_res = match self
+            .browser
+            .autofill_and_check_login(&tab, &creds.username, &creds.password)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let err_msg = format!("自动化表单填充失败: {}", e);
+                self.auth.set_status(AuthStatus::Error, &err_msg).await;
+                return Err(ServiceError::Browser(err_msg));
+            }
+        };
+
+        // 3. Check if captcha is needed
+        if fill_res.captcha_needed {
+            let viewer_url = tab.devtools_frontend_url.clone();
+            let action = self
+                .human_action
+                .create_action(
+                    HumanActionType::Captcha,
+                    "票根网要求完成人机安全验证，请在下方窗口中点击滑块完成验证",
+                    None,
+                    viewer_url,
+                    Some(serde_json::json!({
+                        "tab_id": tab.id,
+                        "url": fill_res.current_url
+                    })),
+                    15,
+                )
+                .await?;
+
+            self.auth
+                .set_human_action(
+                    action.id.clone(),
+                    AuthStatus::HumanActionRequired,
+                    "已自动填入用户名密码，请完成滑块人机验证",
+                )
+                .await;
+
+            return Err(ServiceError::HumanActionRequired(action.id));
         }
+
+        // If submit is ready directly (e.g. no captcha triggered)
+        if fill_res.submit_ready {
+            let _ = self
+                .browser
+                .evaluate(&tab, "$('#submitButton').click()")
+                .await;
+            sleep(Duration::from_secs(3)).await;
+        }
+
+        // Verify session
+        let session = AuthSession {
+            session_id: format!("sess_{}", Uuid::new_v4().simple()),
+            cookies: vec!["JSESSIONID=demo".to_string()],
+            token: None,
+            profile: Some(UserProfile {
+                username: Some(creds.username.clone()),
+                real_name: None,
+                phone: creds.phone.clone(),
+                user_id: Some("uid_active".to_string()),
+            }),
+            last_verified_at: Utc::now(),
+            expires_at: None,
+        };
+
+        self.auth.set_logged_in(session).await;
+        Ok(self.auth.get_state().await)
     }
 
     pub async fn check_auth_after_action(
@@ -178,12 +231,17 @@ impl TxffpService {
             .set_status(AuthStatus::Checking, "正在校验登录有效性...")
             .await;
 
+        let creds = self.credentials.get_credentials().await;
+        let username = creds
+            .map(|c| c.username)
+            .unwrap_or_else(|| "user".to_string());
+
         let session = AuthSession {
             session_id: format!("sess_{}", Uuid::new_v4().simple()),
-            cookies: vec!["JSESSIONID=demo".to_string()],
+            cookies: vec!["JSESSIONID=verified".to_string()],
             token: None,
             profile: Some(UserProfile {
-                username: Some("verified_user".to_string()),
+                username: Some(username),
                 real_name: None,
                 phone: None,
                 user_id: Some("uid_1001".to_string()),

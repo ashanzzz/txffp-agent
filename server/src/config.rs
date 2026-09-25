@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub auto_login: bool,
     pub max_auth_attempts: u32,
     pub steel_base_url: String,
+    pub cdp_base_url: String,
     pub scrapling_base_url: String,
     pub scrapling_mcp_auth_token: Option<String>,
     pub research_mode: bool,
@@ -79,6 +80,16 @@ impl AppConfig {
         let steel_base_url = std::env::var("STEEL_BASE_URL")
             .unwrap_or_else(|_| "http://192.168.8.11:13000".to_string());
 
+        let cdp_base_url = std::env::var("CDP_BASE_URL").unwrap_or_else(|_| {
+            if steel_base_url.contains(":13000") {
+                steel_base_url.replace(":13000", ":19223")
+            } else if steel_base_url.contains(":3000") {
+                steel_base_url.replace(":3000", ":9223")
+            } else {
+                "http://192.168.8.11:19223".to_string()
+            }
+        });
+
         let scrapling_base_url = std::env::var("SCRAPLING_BASE_URL")
             .unwrap_or_else(|_| "http://192.168.8.11:8111".to_string());
 
@@ -103,6 +114,7 @@ impl AppConfig {
             auto_login,
             max_auth_attempts,
             steel_base_url,
+            cdp_base_url,
             scrapling_base_url,
             scrapling_mcp_auth_token,
             research_mode,
