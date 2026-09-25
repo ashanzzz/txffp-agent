@@ -166,7 +166,7 @@ impl TxffpService {
 
         // 3. Check if captcha is needed
         if fill_res.captcha_needed {
-            let viewer_url = tab.devtools_frontend_url.clone();
+            let viewer_url = Some(self.browser.get_interactive_viewer_url(&tab.id));
             let action = self
                 .human_action
                 .create_action(

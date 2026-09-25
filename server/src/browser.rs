@@ -74,6 +74,17 @@ impl SteelBrowserDriver {
         }
     }
 
+    pub fn get_interactive_viewer_url(&self, target_id: &str) -> String {
+        let cdp_host = self
+            .cdp_base_url
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        format!(
+            "http://{}/devtools/devtools_app.html?ws={}/devtools/page/{}",
+            cdp_host, cdp_host, target_id
+        )
+    }
+
     pub async fn check_health(&self) -> bool {
         let url = format!("{}/json/version", self.cdp_base_url);
         self.client
@@ -205,7 +216,6 @@ impl SteelBrowserDriver {
                 const loginInput = document.getElementById('loginName');
                 const passInput = document.getElementById('passwd');
                 const submitBtn = document.getElementById('submitButton');
-                const captchaContainer = document.getElementById('sc');
                 const captchaParam = document.getElementById('captchaVerifyParam');
 
                 let filled = false;
