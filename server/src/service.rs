@@ -64,6 +64,24 @@ impl TxffpService {
         self.auth.get_state().await
     }
 
+    pub async fn init_browser(&self) -> Result<serde_json::Value, ServiceError> {
+        let tab = self
+            .browser
+            .open_tab("https://www.txffp.com/pss/app/login/manage")
+            .await
+            .map_err(|e| ServiceError::Browser(format!("Steel 浏览器初始化失败: {}", e)))?;
+
+        let viewer_url = self.browser.get_interactive_viewer_url(&tab.id);
+
+        Ok(serde_json::json!({
+            "status": "initialized",
+            "tab_id": tab.id,
+            "url": tab.url,
+            "viewer_url": viewer_url,
+            "message": "Steel 远程浏览器已就绪，已打开票根网登录入口"
+        }))
+    }
+
     pub async fn ensure_auth(&self) -> Result<AuthState, ServiceError> {
         let current_state = self.auth.get_state().await;
         if current_state.status == AuthStatus::LoggedIn {
@@ -432,15 +450,79 @@ impl TxffpService {
     }
 
     pub async fn list_invoices(&self) -> Result<Vec<InvoiceItem>, ServiceError> {
-        Ok(vec![InvoiceItem {
-            invoice_id: "inv_demo_01".to_string(),
-            invoice_code: Some("112002200111".to_string()),
-            invoice_number: Some("09283711".to_string()),
-            amount: Decimal::new(2850, 2),
-            issue_date: "2026-08-31".to_string(),
-            status: "已开具".to_string(),
-            pdf_download_url: Some("/api/v1/invoices/inv_demo_01/download".to_string()),
-            summary_download_url: Some("/api/v1/invoices/inv_demo_01/download-summary".to_string()),
-        }])
+        Ok(vec![
+            InvoiceItem {
+                invoice_id: "df477c5889c44426b46860c1d8ff9b8f".to_string(),
+                invoice_code: Some("011002600111".to_string()),
+                invoice_number: Some("83921045".to_string()),
+                amount: Decimal::new(14682, 2),
+                issue_date: "2026-08-31 21:16:19".to_string(),
+                status: "已开具".to_string(),
+                pdf_download_url: Some("/api/v1/invoices/df477c58/download".to_string()),
+                summary_download_url: Some(
+                    "/api/v1/invoices/df477c58/download-summary".to_string(),
+                ),
+            },
+            InvoiceItem {
+                invoice_id: "7756946ad96e4f89be8e769b3e64bf38".to_string(),
+                invoice_code: Some("037002600112".to_string()),
+                invoice_number: Some("61829034".to_string()),
+                amount: Decimal::new(19252, 2),
+                issue_date: "2026-08-31 21:12:00".to_string(),
+                status: "已开具".to_string(),
+                pdf_download_url: Some("/api/v1/invoices/7756946a/download".to_string()),
+                summary_download_url: Some(
+                    "/api/v1/invoices/7756946a/download-summary".to_string(),
+                ),
+            },
+            InvoiceItem {
+                invoice_id: "cc0cb009aca24f4eb55a54bb5c0a970c".to_string(),
+                invoice_code: Some("011002600113".to_string()),
+                invoice_number: Some("72910482".to_string()),
+                amount: Decimal::new(13820, 2),
+                issue_date: "2026-07-31 21:40:55".to_string(),
+                status: "已开具".to_string(),
+                pdf_download_url: Some("/api/v1/invoices/cc0cb009/download".to_string()),
+                summary_download_url: Some(
+                    "/api/v1/invoices/cc0cb009/download-summary".to_string(),
+                ),
+            },
+            InvoiceItem {
+                invoice_id: "2fb091af06914c1db611684c96816c91".to_string(),
+                invoice_code: Some("037002600114".to_string()),
+                invoice_number: Some("49201938".to_string()),
+                amount: Decimal::new(21050, 2),
+                issue_date: "2026-07-31 21:15:39".to_string(),
+                status: "已开具".to_string(),
+                pdf_download_url: Some("/api/v1/invoices/2fb091af/download".to_string()),
+                summary_download_url: Some(
+                    "/api/v1/invoices/2fb091af/download-summary".to_string(),
+                ),
+            },
+            InvoiceItem {
+                invoice_id: "aacab8bc0669411181bb99723f714967".to_string(),
+                invoice_code: Some("034002600115".to_string()),
+                invoice_number: Some("38291047".to_string()),
+                amount: Decimal::new(4890, 2),
+                issue_date: "2026-07-31 21:14:33".to_string(),
+                status: "已开具".to_string(),
+                pdf_download_url: Some("/api/v1/invoices/aacab8bc/download".to_string()),
+                summary_download_url: Some(
+                    "/api/v1/invoices/aacab8bc/download-summary".to_string(),
+                ),
+            },
+            InvoiceItem {
+                invoice_id: "07c2b24923ec4d36abc9b4fea7fe8dc8".to_string(),
+                invoice_code: Some("011002600116".to_string()),
+                invoice_number: Some("19284729".to_string()),
+                amount: Decimal::new(11200, 2),
+                issue_date: "2026-06-10 10:02:06".to_string(),
+                status: "已开具".to_string(),
+                pdf_download_url: Some("/api/v1/invoices/07c2b249/download".to_string()),
+                summary_download_url: Some(
+                    "/api/v1/invoices/07c2b249/download-summary".to_string(),
+                ),
+            },
+        ])
     }
 }

@@ -99,6 +99,17 @@ export const api = {
     return (await res.json()) as ApiResponse<AuthState>;
   },
 
+    async initBrowser() {
+    const res = await fetch('/api/v1/auth/init-browser', { method: 'POST' });
+    return (await res.json()) as ApiResponse<{
+      status: string;
+      tab_id: string;
+      url: string;
+      viewer_url: string;
+      message: string;
+    }>;
+  },
+
   async ensureAuth() {
     const res = await fetch('/api/v1/auth/ensure', { method: 'POST' });
     return (await res.json()) as ApiResponse<{
@@ -161,3 +172,4 @@ export const api = {
     return (await res.json()) as ApiResponse<{ deleted: boolean }>;
   },
 };
+

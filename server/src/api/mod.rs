@@ -79,6 +79,10 @@ pub fn create_router(service: Arc<TxffpService>) -> Router {
         // API v1 routes
         .route("/api/v1/health", get(health_check))
         .route("/api/v1/auth/status", get(get_auth_status))
+        .route(
+            "/api/v1/auth/init-browser",
+            axum::routing::post(init_browser),
+        )
         .route("/api/v1/auth/ensure", axum::routing::post(ensure_auth))
         .route("/api/v1/auth/check", axum::routing::post(check_auth))
         .route("/api/v1/cards", get(get_cards))
@@ -134,6 +138,13 @@ async fn render_human_page(
             Html("<h1>404 Not Found</h1><p>未找到对应的人工处理通道或该任务已失效。</p>"),
         )
             .into_response(),
+    }
+}
+
+async fn init_browser(State(service): State<Arc<TxffpService>>) -> impl IntoResponse {
+    match service.init_browser().await {
+        Ok(data) => ApiResponse::success(data),
+        Err(e) => map_service_error(e),
     }
 }
 
