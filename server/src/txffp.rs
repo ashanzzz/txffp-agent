@@ -16,9 +16,14 @@ pub fn encrypt_password(password: &str) -> String {
     padded.extend_from_slice(bytes);
     padded.resize(bytes.len() + pad_len, pad_len as u8);
 
-    for chunk in padded.chunks_exact_mut(16) {
-        let block: &mut Block = chunk.try_into().expect("16-byte chunk");
+    let mut offset = 0;
+    while offset < padded.len() {
+        let chunk: &mut [u8; 16] = (&mut padded[offset..offset + 16])
+            .try_into()
+            .expect("16-byte block");
+        let block: &mut Block = chunk.into();
         cipher.encrypt_block(block);
+        offset += 16;
     }
 
     base64::engine::general_purpose::STANDARD.encode(&padded)
