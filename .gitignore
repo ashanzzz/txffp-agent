@@ -24,6 +24,7 @@ secrets.json
 *.db-shm
 downloads/
 data/research/
+docs/research/scripts/
 
 # IDE / OS
 .idea/

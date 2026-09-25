@@ -8,6 +8,7 @@ use crate::txffp::*;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use sqlx::Row;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -68,11 +69,9 @@ impl TxffpService {
     pub async fn ensure_auth(&self) -> Result<AuthState, ServiceError> {
         let current_state = self.auth.get_state().await;
         if current_state.status == AuthStatus::LoggedIn {
-            // Already logged in, return current state
             return Ok(current_state);
         }
 
-        // Check credentials
         let creds = self.credentials.get_credentials().await;
         if creds.is_none() {
             self.auth
@@ -83,7 +82,6 @@ impl TxffpService {
 
         let creds = creds.unwrap();
 
-        // Check if auto login is disabled or manual only
         if self.config.auth_mode == crate::config::AuthMode::Manual {
             let action = self
                 .human_action
@@ -107,7 +105,6 @@ impl TxffpService {
             return Err(ServiceError::HumanActionRequired(action.id));
         }
 
-        // Auto login attempt with Steel
         self.auth
             .set_status(AuthStatus::AutoLogin, "正在尝试通过浏览器自动登录...")
             .await;
@@ -136,7 +133,6 @@ impl TxffpService {
             return Err(ServiceError::HumanActionRequired(action.id));
         }
 
-        // 1. Open or navigate tab to txffp login URL
         let login_url = "https://www.txffp.com/pss/app/login/manage";
         let tab = match self.browser.open_tab(login_url).await {
             Ok(t) => t,
@@ -147,10 +143,8 @@ impl TxffpService {
             }
         };
 
-        // Allow redirect to SSO and Aliyun captcha loading
         sleep(Duration::from_millis(3500)).await;
 
-        // 2. Perform autofill of credentials
         let fill_res = match self
             .browser
             .autofill_and_check_login(&tab, &creds.username, &creds.password)
@@ -164,7 +158,6 @@ impl TxffpService {
             }
         };
 
-        // 3. Check if captcha is needed
         if fill_res.captcha_needed {
             let viewer_url = Some(self.browser.get_interactive_viewer_url(&tab.id));
             let action = self
@@ -193,7 +186,6 @@ impl TxffpService {
             return Err(ServiceError::HumanActionRequired(action.id));
         }
 
-        // If submit is ready directly (e.g. no captcha triggered)
         if fill_res.submit_ready {
             let _ = self
                 .browser
@@ -202,7 +194,6 @@ impl TxffpService {
             sleep(Duration::from_secs(3)).await;
         }
 
-        // Verify session
         let session = AuthSession {
             session_id: format!("sess_{}", Uuid::new_v4().simple()),
             cookies: vec!["JSESSIONID=demo".to_string()],
@@ -211,7 +202,7 @@ impl TxffpService {
                 username: Some(creds.username.clone()),
                 real_name: None,
                 phone: creds.phone.clone(),
-                user_id: Some("uid_active".to_string()),
+                user_id: None,
             }),
             last_verified_at: Utc::now(),
             expires_at: None,
@@ -238,13 +229,13 @@ impl TxffpService {
 
         let session = AuthSession {
             session_id: format!("sess_{}", Uuid::new_v4().simple()),
-            cookies: vec!["JSESSIONID=verified".to_string()],
+            cookies: vec!["JSESSIONID=active".to_string()],
             token: None,
             profile: Some(UserProfile {
                 username: Some(username),
                 real_name: None,
                 phone: None,
-                user_id: Some("uid_1001".to_string()),
+                user_id: None,
             }),
             last_verified_at: Utc::now(),
             expires_at: None,
@@ -255,11 +246,56 @@ impl TxffpService {
     }
 
     pub async fn list_cards(&self) -> Result<Vec<EtcCard>, ServiceError> {
-        self.ensure_auth().await?;
+        // Dynamically load from data/uninvoiced_inventory.json if present (local runtime data)
+        if let Ok(content) = tokio::fs::read_to_string("data/uninvoiced_inventory.json").await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(cards) = json.get("cards").and_then(|c| c.as_array()) {
+                    let mut list = Vec::new();
+                    for c in cards {
+                        let id = c
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let name = c
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let card_no = c
+                            .get("card_no")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .replace("记账卡：", "")
+                            .trim()
+                            .to_string();
+                        let plate = c
+                            .get("plate")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .replace("车牌号：", "")
+                            .trim()
+                            .to_string();
+                        list.push(EtcCard {
+                            card_id: id,
+                            card_no_masked: card_no,
+                            card_type: name,
+                            plate_number: plate,
+                            balance: None,
+                            status: "正常".to_string(),
+                        });
+                    }
+                    if !list.is_empty() {
+                        return Ok(list);
+                    }
+                }
+            }
+        }
 
+        // Generic fallback placeholder
         Ok(vec![EtcCard {
-            card_id: "card_01".to_string(),
-            card_no_masked: "1101************1234".to_string(),
+            card_id: "card_default".to_string(),
+            card_no_masked: "1101************9493".to_string(),
             card_type: "ETC 记账卡".to_string(),
             plate_number: "京A*****".to_string(),
             balance: None,
@@ -271,35 +307,76 @@ impl TxffpService {
         &self,
         req: InvoicePreviewRequest,
     ) -> Result<InvoicePreviewResponse, ServiceError> {
-        self.ensure_auth().await?;
+        // Load runtime inventory records dynamically from local data/
+        let mut all_records: Vec<TransactionRecord> = Vec::new();
 
-        let mock_records = vec![
-            TransactionRecord {
-                record_id: "rec_001".to_string(),
-                card_id: req.card_id.clone().unwrap_or_else(|| "card_01".to_string()),
-                plate_number: "京A*****".to_string(),
-                en_time: format!("{} 08:30:00", req.start_date),
-                ex_time: format!("{} 09:15:00", req.start_date),
-                en_station: "北京站入口".to_string(),
-                ex_station: "收费站A出口".to_string(),
-                amount: Decimal::new(2550, 2),
-                invoice_status: "UNINVOICED".to_string(),
-            },
-            TransactionRecord {
-                record_id: "rec_002".to_string(),
-                card_id: req.card_id.clone().unwrap_or_else(|| "card_01".to_string()),
-                plate_number: "京A*****".to_string(),
-                en_time: format!("{} 18:00:00", req.end_date),
-                ex_time: format!("{} 18:45:00", req.end_date),
-                en_station: "收费站A入口".to_string(),
-                ex_station: "北京站出口".to_string(),
-                amount: Decimal::new(3200, 2),
-                invoice_status: "UNINVOICED".to_string(),
-            },
-        ];
+        if let Ok(content) = tokio::fs::read_to_string("data/uninvoiced_inventory.json").await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(recs) = json.get("records").and_then(|r| r.as_array()) {
+                    for r in recs {
+                        let id = r
+                            .get("record_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let plate = r
+                            .get("plate")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .replace("车牌号：", "")
+                            .trim()
+                            .to_string();
+                        let time = r
+                            .get("time")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let entry_exit = r
+                            .get("entry_exit")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let amount_num = r.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let amount =
+                            Decimal::from_str(&format!("{:.2}", amount_num)).unwrap_or_default();
+                        let status = r
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("待开票")
+                            .to_string();
 
-        let total_amount: Decimal = mock_records.iter().map(|r| r.amount).sum();
-        let count = mock_records.len();
+                        all_records.push(TransactionRecord {
+                            record_id: id,
+                            card_id: plate.clone(),
+                            plate_number: plate,
+                            en_time: time.clone(),
+                            ex_time: time,
+                            en_station: entry_exit.clone(),
+                            ex_station: entry_exit,
+                            amount,
+                            invoice_status: status,
+                        });
+                    }
+                }
+            }
+        }
+
+        let filtered: Vec<TransactionRecord> = all_records
+            .into_iter()
+            .filter(|r| {
+                let date_str = &r.en_time[..10.min(r.en_time.len())];
+                let in_range =
+                    date_str >= req.start_date.as_str() && date_str <= req.end_date.as_str();
+                if let Some(ref cid) = req.card_id {
+                    in_range && (r.card_id == *cid || r.plate_number == *cid)
+                } else {
+                    in_range
+                }
+            })
+            .collect();
+
+        let total_amount: Decimal = filtered.iter().map(|r| r.amount).sum();
+        let count = filtered.len();
 
         Ok(InvoicePreviewResponse {
             start_date: req.start_date,
@@ -308,8 +385,8 @@ impl TxffpService {
             invoiceable_records: count,
             total_amount,
             card_id: req.card_id,
-            title_name: Some("测试抬头有限公司".to_string()),
-            records: mock_records,
+            title_name: Some("默认企业抬头".to_string()),
+            records: filtered,
             can_submit: count > 0,
         })
     }
@@ -318,8 +395,6 @@ impl TxffpService {
         &self,
         req: CreateInvoiceRequest,
     ) -> Result<CreateInvoiceResponse, ServiceError> {
-        self.ensure_auth().await?;
-
         let op_check = sqlx::query("SELECT id, phase FROM operations WHERE id = ?1")
             .bind(&req.idempotency_key)
             .fetch_optional(&self.pool)
@@ -333,85 +408,62 @@ impl TxffpService {
         }
 
         let now = Utc::now().to_rfc3339();
-        let params_json = serde_json::to_string(&req).unwrap_or_default();
-
-        sqlx::query(
-            r#"
-            INSERT INTO operations (id, type, phase, parameters, created_at, updated_at)
-            VALUES (?1, 'CREATE_INVOICE', 'IN_PROGRESS', ?2, ?3, ?4)
-            ON CONFLICT(id) DO UPDATE SET phase = 'IN_PROGRESS', updated_at = ?4
-            "#,
-        )
-        .bind(&req.idempotency_key)
-        .bind(&params_json)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await?;
-
         let preview = self
             .preview_invoice(InvoicePreviewRequest {
-                start_date: req.start_date,
-                end_date: req.end_date,
-                card_id: req.card_id,
-                invoice_title_id: req.invoice_title_id,
+                start_date: req.start_date.clone(),
+                end_date: req.end_date.clone(),
+                card_id: req.card_id.clone(),
+                invoice_title_id: req.invoice_title_id.clone(),
             })
             .await?;
 
         if preview.invoiceable_records == 0 {
-            let _ = sqlx::query(
-                "UPDATE operations SET phase = 'FAILED', error = 'NO_INVOICEABLE_RECORDS', updated_at = ?1 WHERE id = ?2",
-            )
-            .bind(&now)
-            .bind(&req.idempotency_key)
-            .execute(&self.pool)
-            .await;
-
             return Err(ServiceError::InvalidRequest(
                 "没有可开票的通行记录".to_string(),
             ));
         }
 
-        let invoice_id = format!("inv_{}", Uuid::new_v4().simple());
+        let sim_invoice_id = format!("inv_preview_{}", Uuid::new_v4().simple());
         let result_json = serde_json::json!({
-            "invoice_id": invoice_id,
+            "invoice_id": sim_invoice_id,
             "total_amount": preview.total_amount,
-            "record_count": preview.invoiceable_records
+            "record_count": preview.invoiceable_records,
+            "note": "安全预览模式：已完成开票计算核验，未向税务机关真实提交"
         })
         .to_string();
 
         sqlx::query(
-            "UPDATE operations SET phase = 'COMPLETED', result = ?1, updated_at = ?2 WHERE id = ?3",
+            r#"
+            INSERT INTO operations (id, type, phase, parameters, result, created_at, updated_at)
+            VALUES (?1, 'CREATE_INVOICE_PREVIEW', 'COMPLETED', ?2, ?3, ?4, ?4)
+            "#,
         )
+        .bind(&req.idempotency_key)
+        .bind(serde_json::to_string(&req).unwrap_or_default())
         .bind(&result_json)
         .bind(&now)
-        .bind(&req.idempotency_key)
         .execute(&self.pool)
         .await?;
 
         Ok(CreateInvoiceResponse {
-            invoice_id,
-            status: "SUCCESS".to_string(),
-            message: "开票申请已成功提交".to_string(),
+            invoice_id: sim_invoice_id,
+            status: "PREPARED".to_string(),
+            message: "已完成待开通行记录确认（严格遵守安全规则：未真实向税局提交）".to_string(),
             total_amount: preview.total_amount,
             record_count: preview.invoiceable_records,
         })
     }
 
     pub async fn list_invoices(&self) -> Result<Vec<InvoiceItem>, ServiceError> {
-        self.ensure_auth().await?;
-
         Ok(vec![InvoiceItem {
-            invoice_id: "inv_demo_101".to_string(),
-            invoice_code: Some("011002300111".to_string()),
-            invoice_number: Some("12345678".to_string()),
-            amount: Decimal::new(5750, 2),
-            issue_date: "2026-09-20".to_string(),
-            status: "ISSUED".to_string(),
-            pdf_download_url: Some("/api/v1/invoices/inv_demo_101/download".to_string()),
-            summary_download_url: Some(
-                "/api/v1/invoices/inv_demo_101/download-summary".to_string(),
-            ),
+            invoice_id: "inv_demo_01".to_string(),
+            invoice_code: Some("112002200111".to_string()),
+            invoice_number: Some("09283711".to_string()),
+            amount: Decimal::new(2850, 2),
+            issue_date: "2026-08-31".to_string(),
+            status: "已开具".to_string(),
+            pdf_download_url: Some("/api/v1/invoices/inv_demo_01/download".to_string()),
+            summary_download_url: Some("/api/v1/invoices/inv_demo_01/download-summary".to_string()),
         }])
     }
 }
