@@ -1,4 +1,16 @@
-# Multi-stage Dockerfile for txffp-server
+# Multi-stage Dockerfile: Unified Backend & WebUI for txffp-agent
+
+# Stage 1: Build React Frontend
+FROM node:20-alpine AS web-builder
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json* ./
+RUN npm install
+
+COPY web/ ./
+RUN npm run build
+
+# Stage 2: Build Rust Backend
 FROM rust:bookworm AS builder
 
 WORKDIR /app
@@ -14,7 +26,7 @@ COPY server/src ./server/src
 RUN touch server/src/main.rs server/src/lib.rs
 RUN cargo build --release -p txffp-server
 
-# Runtime image
+# Stage 3: Unified Runtime Image
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY --from=builder /app/target/release/txffp-server /usr/local/bin/txffp-server
+COPY --from=web-builder /web/dist /app/dist
 
 RUN mkdir -p /data
 

@@ -10,6 +10,7 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::sync::Arc;
+use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Serialize)]
 pub struct ApiResponse<T: Serialize> {
@@ -67,7 +68,7 @@ impl<T: Serialize> ApiResponse<T> {
 }
 
 pub fn create_router(service: Arc<TxffpService>) -> Router {
-    Router::new()
+    let mut router = Router::new()
         // Top-level health and human action page
         .route("/health", get(health_check))
         .route("/human/{token}", get(render_human_page))
@@ -107,8 +108,20 @@ pub fn create_router(service: Arc<TxffpService>) -> Router {
         .route(
             "/api/v1/settings/credentials",
             axum::routing::put(update_credentials).delete(delete_credentials),
-        )
-        .with_state(service)
+        );
+
+    let dist_candidates = ["web/dist", "dist", "/app/dist"];
+    for cand in dist_candidates {
+        let p = std::path::Path::new(cand);
+        if p.exists() && p.join("index.html").exists() {
+            let index_path = p.join("index.html");
+            let serve_dir = ServeDir::new(cand).fallback(ServeFile::new(index_path));
+            router = router.fallback_service(serve_dir);
+            break;
+        }
+    }
+
+    router.with_state(service)
 }
 
 // Handlers
