@@ -82,6 +82,41 @@ impl SteelBrowserDriver {
         }
     }
 
+    pub async fn get_active_txffp_tab(&self) -> Result<Option<CdpTarget>, BrowserError> {
+        let targets = self.list_targets().await?;
+        let tab = targets
+            .into_iter()
+            .find(|t| t.url.contains("txffp.com") || t.title.contains("票根"));
+        Ok(tab)
+    }
+
+    pub async fn check_session_alive(&self) -> Result<bool, BrowserError> {
+        let targets = self.list_targets().await?;
+        let target = match targets
+            .into_iter()
+            .find(|t| t.url.contains("pss.txffp.com"))
+        {
+            Some(t) => t,
+            None => return Ok(false),
+        };
+
+        let script = r#"
+            (() => {
+                const text = document.body ? document.body.innerText : "";
+                const url = window.location.href;
+                const hasDashboard = text.includes("个人中心") || text.includes("我的ETC");
+                const hasRelogin = text.includes("重新登录") || text.includes("无法访问") || url.includes("sso.txffp.com");
+                return hasDashboard && !hasRelogin;
+            })()
+        "#;
+
+        if let Ok(val) = self.evaluate(&target, script).await {
+            return Ok(val.as_bool().unwrap_or(false));
+        }
+
+        Ok(false)
+    }
+
     pub fn get_interactive_viewer_url(&self, target_id: &str) -> String {
         let cdp_host = self
             .cdp_base_url

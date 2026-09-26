@@ -85,7 +85,27 @@ impl TxffpService {
     pub async fn ensure_auth(&self) -> Result<AuthState, ServiceError> {
         let current_state = self.auth.get_state().await;
         if current_state.status == AuthStatus::LoggedIn {
-            return Ok(current_state);
+            if let Ok(true) = self.browser.check_session_alive().await {
+                return Ok(current_state);
+            }
+        } else {
+            if let Ok(true) = self.browser.check_session_alive().await {
+                let session = AuthSession {
+                    session_id: format!("sess_{}", Uuid::new_v4().simple()),
+                    cookies: vec!["JSESSIONID=active".to_string()],
+                    token: None,
+                    profile: Some(UserProfile {
+                        username: self.credentials.get_credentials().await.map(|c| c.username),
+                        real_name: None,
+                        phone: None,
+                        user_id: None,
+                    }),
+                    last_verified_at: Utc::now(),
+                    expires_at: None,
+                };
+                self.auth.set_logged_in(session).await;
+                return Ok(self.auth.get_state().await);
+            }
         }
 
         let creds = self.credentials.get_credentials().await;
@@ -208,6 +228,51 @@ impl TxffpService {
                 Err(ServiceError::Browser(err_msg))
             }
         }
+    }
+
+    pub async fn check_session_liveness(&self) -> Result<AuthState, ServiceError> {
+        let is_alive = self.browser.check_session_alive().await.unwrap_or(false);
+        if is_alive {
+            let creds = self.credentials.get_credentials().await;
+            let username = creds
+                .map(|c| c.username)
+                .unwrap_or_else(|| "user".to_string());
+            let session = AuthSession {
+                session_id: format!("sess_{}", Uuid::new_v4().simple()),
+                cookies: vec!["JSESSIONID=verified".to_string()],
+                token: None,
+                profile: Some(UserProfile {
+                    username: Some(username),
+                    real_name: None,
+                    phone: None,
+                    user_id: None,
+                }),
+                last_verified_at: Utc::now(),
+                expires_at: None,
+            };
+            self.auth.set_logged_in(session).await;
+            Ok(self.auth.get_state().await)
+        } else {
+            self.auth
+                .set_status(AuthStatus::SessionExpired, "检测到会话已离线或未就绪")
+                .await;
+            if self.config.auto_login && self.credentials.has_credentials().await {
+                self.ensure_auth().await
+            } else {
+                Ok(self.auth.get_state().await)
+            }
+        }
+    }
+
+    pub async fn get_browser_tab_info(&self) -> Option<serde_json::Value> {
+        let tab = self.browser.get_active_txffp_tab().await.ok()??;
+        let viewer_url = self.browser.get_interactive_viewer_url(&tab.id);
+        Some(serde_json::json!({
+            "tab_id": tab.id,
+            "title": tab.title,
+            "url": tab.url,
+            "viewer_url": viewer_url
+        }))
     }
 
     pub async fn check_auth_after_action(

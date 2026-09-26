@@ -128,12 +128,14 @@ pub fn create_router(service: Arc<TxffpService>) -> Router {
 
 async fn health_check(State(service): State<Arc<TxffpService>>) -> impl IntoResponse {
     let steel_ok = service.browser.check_health().await;
+    let active_tab = service.get_browser_tab_info().await;
     ApiResponse::success(serde_json::json!({
         "status": "ok",
         "service": "txffp-server",
         "version": env!("CARGO_PKG_VERSION"),
         "steel_connected": steel_ok,
-        "database": "sqlite_connected"
+        "database": "sqlite_connected",
+        "active_tab": active_tab
     }))
 }
 
@@ -194,15 +196,26 @@ async fn ensure_auth(State(service): State<Arc<TxffpService>>) -> impl IntoRespo
 
 async fn check_auth(
     State(service): State<Arc<TxffpService>>,
-    Json(payload): Json<serde_json::Value>,
+    payload_opt: Option<Json<serde_json::Value>>,
 ) -> impl IntoResponse {
-    let action_id = payload
-        .get("action_id")
-        .and_then(|v| v.as_str())
+    let action_id = payload_opt
+        .and_then(|p| {
+            p.get("action_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_default();
-    match service.check_auth_after_action(action_id).await {
-        Ok(state) => ApiResponse::success(state),
-        Err(e) => ApiResponse::fail("AUTH_VERIFICATION_FAILED", e.to_string()),
+
+    if !action_id.is_empty() {
+        match service.check_auth_after_action(&action_id).await {
+            Ok(state) => ApiResponse::success(state),
+            Err(e) => ApiResponse::fail("AUTH_VERIFICATION_FAILED", e.to_string()),
+        }
+    } else {
+        match service.check_session_liveness().await {
+            Ok(state) => ApiResponse::success(state),
+            Err(e) => map_service_error(e),
+        }
     }
 }
 
