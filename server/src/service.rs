@@ -244,7 +244,9 @@ impl TxffpService {
     }
 
     pub async fn list_cards(&self) -> Result<Vec<EtcCard>, ServiceError> {
-        if let Ok(content) = tokio::fs::read_to_string(self.config.data_dir.join("uninvoiced_inventory.json")).await {
+        if let Ok(content) =
+            tokio::fs::read_to_string(self.config.data_dir.join("uninvoiced_inventory.json")).await
+        {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(cards) = json.get("cards").and_then(|c| c.as_array()) {
                     let mut list = Vec::new();
@@ -305,7 +307,9 @@ impl TxffpService {
     ) -> Result<InvoicePreviewResponse, ServiceError> {
         let mut all_records: Vec<TransactionRecord> = Vec::new();
 
-        if let Ok(content) = tokio::fs::read_to_string(self.config.data_dir.join("uninvoiced_inventory.json")).await {
+        if let Ok(content) =
+            tokio::fs::read_to_string(self.config.data_dir.join("uninvoiced_inventory.json")).await
+        {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(recs) = json.get("records").and_then(|r| r.as_array()) {
                     for r in recs {
@@ -526,4 +530,3 @@ impl TxffpService {
         ])
     }
 }
-
